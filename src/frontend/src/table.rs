@@ -21,7 +21,7 @@ use async_trait::async_trait;
 use client::Database;
 use common_error::ext::BoxedError;
 use common_meta::table_name::TableName;
-use common_query::error::{ExecutePhysicalPlanSnafu, Result as QueryResult};
+use common_query::error::Result as QueryResult;
 use common_query::logical_plan::Expr;
 use common_query::physical_plan::{PhysicalPlan, PhysicalPlanRef};
 use common_recordbatch::adapter::AsyncRecordBatchStreamAdapter;
@@ -133,7 +133,7 @@ impl Table for DistTable {
 
         let stream = Box::pin(async_stream::stream!({
             for partition_exec in partition_execs {
-                let stream = partition_exec.scan_to_stream().await?;
+                let mut stream = partition_exec.scan_to_stream().await?;
                 while let Some(record_batch) = stream.next().await {
                     yield record_batch;
                 }
@@ -232,12 +232,7 @@ impl PhysicalPlan for DistTableScan {
         _context: Arc<TaskContext>,
     ) -> QueryResult<SendableRecordBatchStream> {
         let exec = self.partition_execs[partition].clone();
-        let stream = Box::pin(async move {
-            exec.scan_to_stream()
-                .await
-                .map_err(BoxedError::new)
-                .context(ExecutePhysicalPlanSnafu)
-        });
+        let stream = Box::pin(async move { exec.scan_to_stream().await });
         let stream = AsyncRecordBatchStreamAdapter::new(self.schema(), stream);
         Ok(Box::pin(stream))
     }
