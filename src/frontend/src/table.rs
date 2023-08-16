@@ -14,36 +14,32 @@
 
 use std::any::Any;
 use std::pin::Pin;
+use std::iter;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use client::Database;
 use common_error::ext::BoxedError;
 use common_meta::table_name::TableName;
-use common_query::error::Result as QueryResult;
+use common_query::error::{ExecutePhysicalPlanSnafu, Result as QueryResult};
 use common_query::logical_plan::Expr;
 use common_query::physical_plan::{PhysicalPlan, PhysicalPlanRef};
 use common_recordbatch::adapter::AsyncRecordBatchStreamAdapter;
 use common_recordbatch::error::{
-    InitRecordbatchStreamSnafu, PollStreamSnafu, Result as RecordBatchResult,
+    ExternalSnafu as RecordBatchExternalSnafu, Result as RecordBatchResult,
 };
-use common_recordbatch::{
-    RecordBatch, RecordBatchStreamAdaptor, RecordBatches, SendableRecordBatchStream,
-};
+use common_recordbatch::{RecordBatchStreamAdaptor, SendableRecordBatchStream};
 use datafusion::execution::context::TaskContext;
-use datafusion::physical_plan::{
-    Partitioning, SendableRecordBatchStream as DfSendableRecordBatchStream,
-};
-use datafusion_common::DataFusionError;
+use datafusion::physical_plan::Partitioning;
 use datatypes::schema::{ColumnSchema, Schema, SchemaRef};
 use futures_util::{Stream, StreamExt};
+use partition::splitter::WriteSplitter;
 use snafu::prelude::*;
 use store_api::storage::ScanRequest;
 use table::error::TableOperationSnafu;
 use table::metadata::{FilterPushDownType, TableInfoRef, TableType};
 use table::requests::{DeleteRequest, InsertRequest};
 use table::Table;
-use tokio::sync::RwLock;
 
 use crate::catalog::FrontendCatalogManager;
 use crate::error::Result;
@@ -132,35 +128,26 @@ impl Table for DistTable {
                 projection: request.projection.clone(),
                 filters: request.filters.clone(),
                 limit: request.limit,
-                batches: Arc::new(RwLock::new(None)),
             }));
         }
 
-        let schema = project_schema(self.schema(), request.projection.as_ref());
-        let schema_to_move = schema.clone();
-        let stream: Pin<Box<dyn Stream<Item = RecordBatchResult<RecordBatch>> + Send>> = Box::pin(
-            async_stream::try_stream! {
-                for partition_exec in partition_execs {
-                    partition_exec
-                        .maybe_init()
-                        .await
-                        .map_err(|e| DataFusionError::External(Box::new(e)))
-                        .context(InitRecordbatchStreamSnafu)?;
-                    let mut stream = partition_exec.as_stream().await.context(InitRecordbatchStreamSnafu)?;
-
-                    while let Some(batch) = stream.next().await{
-                        yield RecordBatch::try_from_df_record_batch(schema_to_move.clone(),batch.context(PollStreamSnafu)?)?
-                    }
+        let stream = Box::pin(async_stream::stream!({
+            for partition_exec in partition_execs {
+                let stream = partition_exec.scan_to_stream().await?;
+                while let Some(record_batch) = stream.next().await {
+                    yield record_batch;
                 }
-            },
-        );
-        let record_batch_stream = RecordBatchStreamAdaptor {
+            }
+        }));
+
+        let schema = project_schema(self.schema(), request.projection.as_ref());
+        let stream = RecordBatchStreamAdaptor {
             schema,
             stream,
             output_ordering: None,
         };
 
-        Ok(Box::pin(record_batch_stream))
+        Ok(Box::pin(stream))
     }
 
     fn supports_filters_pushdown(
@@ -246,10 +233,10 @@ impl PhysicalPlan for DistTableScan {
     ) -> QueryResult<SendableRecordBatchStream> {
         let exec = self.partition_execs[partition].clone();
         let stream = Box::pin(async move {
-            exec.maybe_init()
+            exec.scan_to_stream()
                 .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            exec.as_stream().await
+                .map_err(BoxedError::new)
+                .context(ExecutePhysicalPlanSnafu)
         });
         let stream = AsyncRecordBatchStreamAdapter::new(self.schema(), stream);
         Ok(Box::pin(stream))
@@ -263,38 +250,29 @@ struct PartitionExec {
     projection: Option<Vec<usize>>,
     filters: Vec<Expr>,
     limit: Option<usize>,
-    batches: Arc<RwLock<Option<RecordBatches>>>,
 }
 
 impl PartitionExec {
-    async fn maybe_init(&self) -> Result<()> {
-        if self.batches.read().await.is_some() {
-            return Ok(());
-        }
-
-        let mut batches = self.batches.write().await;
-        if batches.is_some() {
-            return Ok(());
-        }
-
+    async fn scan_to_stream(&self) -> RecordBatchResult<SendableRecordBatchStream> {
         let plan: TableScanPlan = TableScanPlan {
             table_name: self.table_name.clone(),
             projection: self.projection.clone(),
             filters: self.filters.clone(),
             limit: self.limit,
         };
-        let result = self.datanode_instance.grpc_table_scan(plan).await?;
-        let _ = batches.insert(result);
-        Ok(())
-    }
 
-    /// Notice: the record batch will be consumed.
-    async fn as_stream(&self) -> std::result::Result<DfSendableRecordBatchStream, DataFusionError> {
-        let mut batches = self.batches.write().await;
-        Ok(batches
-            .take()
-            .expect("should have been initialized in \"maybe_init\"")
-            .into_df_stream())
+        let output = self
+            .datanode_instance
+            .grpc_table_scan(plan)
+            .await
+            .map_err(BoxedError::new)
+            .context(RecordBatchExternalSnafu)?;
+
+        let Output::Stream(stream) = output else {
+            unreachable!()
+        };
+
+        Ok(stream)
     }
 }
 
