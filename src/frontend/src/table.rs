@@ -13,8 +13,6 @@
 // limitations under the License.
 
 use std::any::Any;
-use std::pin::Pin;
-use std::iter;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -24,6 +22,7 @@ use common_meta::table_name::TableName;
 use common_query::error::Result as QueryResult;
 use common_query::logical_plan::Expr;
 use common_query::physical_plan::{PhysicalPlan, PhysicalPlanRef};
+use common_query::Output;
 use common_recordbatch::adapter::AsyncRecordBatchStreamAdapter;
 use common_recordbatch::error::{
     ExternalSnafu as RecordBatchExternalSnafu, Result as RecordBatchResult,
@@ -32,8 +31,7 @@ use common_recordbatch::{RecordBatchStreamAdaptor, SendableRecordBatchStream};
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::Partitioning;
 use datatypes::schema::{ColumnSchema, Schema, SchemaRef};
-use futures_util::{Stream, StreamExt};
-use partition::splitter::WriteSplitter;
+use futures_util::StreamExt;
 use snafu::prelude::*;
 use store_api::storage::ScanRequest;
 use table::error::TableOperationSnafu;
@@ -42,7 +40,6 @@ use table::requests::{DeleteRequest, InsertRequest};
 use table::Table;
 
 use crate::catalog::FrontendCatalogManager;
-use crate::error::Result;
 use crate::instance::distributed::deleter::DistDeleter;
 use crate::instance::distributed::inserter::DistInserter;
 use crate::table::scan::{DatanodeInstance, TableScanPlan};
