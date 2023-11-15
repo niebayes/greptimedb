@@ -108,6 +108,7 @@ reqwest = { version = "0.11", default-features = false, features = [
     "rustls-tls-native-roots",
     "stream",
 ] }
+rskafka = "0.5"
 rust_decimal = "1.32.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

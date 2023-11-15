@@ -15,10 +15,11 @@
 use api::v1::meta::Partition;
 use common_catalog::format_full_table_name;
 use common_error::ext::BoxedError;
-use common_meta::ddl::{TableMetadataAllocator, TableMetadataAllocatorContext};
+use common_meta::ddl::{TableMetadata, TableMetadataAllocator, TableMetadataAllocatorContext};
 use common_meta::error::{self as meta_error, Result as MetaResult};
 use common_meta::rpc::router::{Region, RegionRoute};
 use common_meta::sequence::SequenceRef;
+use common_meta::wal::kafka::topic_manager::TopicManager as KafkaTopicManager;
 use common_telemetry::warn;
 use snafu::{ensure, ResultExt};
 use store_api::storage::{RegionId, TableId, MAX_REGION_SEQ};
@@ -31,6 +32,7 @@ pub struct MetaSrvTableMetadataAllocator {
     ctx: SelectorContext,
     selector: SelectorRef,
     table_id_sequence: SequenceRef,
+    kafka_topic_manager: Option<KafkaTopicManager>,
 }
 
 impl MetaSrvTableMetadataAllocator {
@@ -38,11 +40,13 @@ impl MetaSrvTableMetadataAllocator {
         ctx: SelectorContext,
         selector: SelectorRef,
         table_id_sequence: SequenceRef,
+        kafka_topic_manager: Option<KafkaTopicManager>,
     ) -> Self {
         Self {
             ctx,
             selector,
             table_id_sequence,
+            kafka_topic_manager,
         }
     }
 }
@@ -54,8 +58,8 @@ impl TableMetadataAllocator for MetaSrvTableMetadataAllocator {
         ctx: &TableMetadataAllocatorContext,
         raw_table_info: &mut RawTableInfo,
         partitions: &[Partition],
-    ) -> MetaResult<(TableId, Vec<RegionRoute>)> {
-        handle_create_region_routes(
+    ) -> MetaResult<TableMetadata> {
+        let (table_id, region_routes) = handle_create_region_routes(
             ctx.cluster_id,
             raw_table_info,
             partitions,
@@ -65,7 +69,18 @@ impl TableMetadataAllocator for MetaSrvTableMetadataAllocator {
         )
         .await
         .map_err(BoxedError::new)
-        .context(meta_error::ExternalSnafu)
+        .context(meta_error::ExternalSnafu)?;
+
+        let region_topics = self
+            .kafka_topic_manager
+            .as_ref()
+            .map(|kafka_topic_manager| kafka_topic_manager.select_topics(region_routes.len()));
+
+        Ok(TableMetadata {
+            table_id,
+            region_routes,
+            region_topics,
+        })
     }
 }
 
