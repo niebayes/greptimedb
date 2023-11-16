@@ -12,11 +12,4 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::hash::Hash;
-
-// TODO(niebayes): maybe we should generialize Id.
-pub type Id = u64;
-
-pub trait Namespace: Send + Sync + Clone + std::fmt::Debug + Hash + PartialEq + Eq {
-    fn id(&self) -> Id;
-}
+pub mod topic_client_manager;

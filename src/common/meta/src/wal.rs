@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::wal::kafka::KafkaOptions;
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub enum WalProvider {
     RaftEngine,
     Kafka,

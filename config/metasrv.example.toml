@@ -51,7 +51,7 @@ first_heartbeat_estimate = "1000ms"
 provider = "Kafka"
 
 # Kafka wal options.
-[wal.kafka]
+[wal.kafka_opts]
 # The broker endpoints of the Kafka cluster. ["127.0.0.1:9090"] by default.
 broker_endpoints = ["127.0.0.1:9090"]
 num_topics = 64

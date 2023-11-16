@@ -17,6 +17,7 @@ use std::any::Any;
 use common_error::ext::ErrorExt;
 use common_error::status_code::StatusCode;
 use common_macro::stack_trace_debug;
+use common_meta::wal::WalProvider;
 use config::ConfigError;
 use rustyline::error::ReadlineError;
 use snafu::{Location, Snafu};
@@ -225,6 +226,12 @@ pub enum Error {
         #[snafu(source)]
         error: std::io::Error,
     },
+
+    #[snafu(display("Unexpected wal provider {:?}", wal_provider))]
+    UnexpectedWalProvider {
+        location: Location,
+        wal_provider: WalProvider,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -252,7 +259,8 @@ impl ErrorExt for Error {
             | Error::NotDataFromOutput { .. }
             | Error::CreateDir { .. }
             | Error::EmptyResult { .. }
-            | Error::InvalidDatabaseName { .. } => StatusCode::InvalidArguments,
+            | Error::InvalidDatabaseName { .. }
+            | Error::UnexpectedWalProvider { .. } => StatusCode::InvalidArguments,
             Error::StartProcedureManager { source, .. }
             | Error::StopProcedureManager { source, .. } => source.status_code(),
             Error::ReplCreation { .. } | Error::Readline { .. } => StatusCode::Internal,

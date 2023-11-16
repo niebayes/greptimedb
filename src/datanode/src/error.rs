@@ -17,6 +17,7 @@ use std::any::Any;
 use common_error::ext::{BoxedError, ErrorExt};
 use common_error::status_code::StatusCode;
 use common_macro::stack_trace_debug;
+use common_meta::wal::WalProvider;
 use common_procedure::ProcedureId;
 use serde_json::error::Error as JsonError;
 use servers::define_into_tonic_status;
@@ -430,6 +431,20 @@ pub enum Error {
         location: Location,
         source: BoxedError,
     },
+
+    #[snafu(display(
+        "The wal provider and the mode is unmatched, wal provider: {:?}, mode: {:?}",
+        wal_provider,
+        mode
+    ))]
+    UnmatchedWalProviderAndMode {
+        wal_provider: WalProvider,
+        mode: servers::Mode,
+        location: Location,
+    },
+
+    #[snafu(display("Missing required raft-engine options",))]
+    MissingRaftEngineOpts { location: Location },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -484,6 +499,10 @@ impl ErrorExt for Error {
             | ColumnDataType { .. }
             | MissingKvBackend { .. }
             | MissingMetaClient { .. } => StatusCode::InvalidArguments,
+
+            UnmatchedWalProviderAndMode { .. } | MissingRaftEngineOpts { .. } => {
+                StatusCode::InvalidArguments
+            }
 
             EncodeJson { .. } | PayloadNotExist { .. } | Unexpected { .. } => {
                 StatusCode::Unexpected

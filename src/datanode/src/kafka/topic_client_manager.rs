@@ -12,11 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::hash::Hash;
+use common_config::wal::kafka::KafkaOptions;
 
-// TODO(niebayes): maybe we should generialize Id.
-pub type Id = u64;
+pub struct TopicClientManager {}
 
-pub trait Namespace: Send + Sync + Clone + std::fmt::Debug + Hash + PartialEq + Eq {
-    fn id(&self) -> Id;
+// TODO(niebayes): for impl, refer to `kafka_impl.rs` in ceresdb.
+
+impl TopicClientManager {
+    pub fn new(kafka_opts: &KafkaOptions) -> Self {
+        unimplemented!()
+    }
 }

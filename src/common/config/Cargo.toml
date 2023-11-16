@@ -6,5 +6,6 @@ license.workspace = true
 
 [dependencies]
 common-base.workspace = true
+common-meta.workspace = true
 humantime-serde.workspace = true
 serde.workspace = true

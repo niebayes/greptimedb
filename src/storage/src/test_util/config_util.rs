@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use common_config::WalConfig;
+use common_config::wal::raft_engine::RaftEngineOptions;
 use common_datasource::compression::CompressionType;
 use log_store::raft_engine::log_store::RaftEngineLogStore;
 use object_store::services::Fs;
@@ -92,7 +92,7 @@ pub async fn new_store_config_with_object_store(
     );
     manifest.start().await.unwrap();
     let log_store = Arc::new(
-        RaftEngineLogStore::try_new(log_store_dir(store_dir), WalConfig::default())
+        RaftEngineLogStore::try_new(log_store_dir(store_dir), RaftEngineOptions::default())
             .await
             .unwrap(),
     );

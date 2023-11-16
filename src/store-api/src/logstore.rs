@@ -16,9 +16,9 @@
 
 use common_error::ext::ErrorExt;
 
-use crate::logstore::entry::{Entry, Id};
+use crate::logstore::entry::{Entry, Id as EntryId};
 use crate::logstore::entry_stream::SendableEntryStream;
-use crate::logstore::namespace::Namespace;
+use crate::logstore::namespace::{Id as NamespaceId, Namespace};
 
 pub mod entry;
 pub mod entry_stream;
@@ -46,7 +46,7 @@ pub trait LogStore: Send + Sync + 'static + std::fmt::Debug {
     async fn read(
         &self,
         ns: &Self::Namespace,
-        id: Id,
+        entry_id: EntryId,
     ) -> Result<SendableEntryStream<Self::Entry, Self::Error>, Self::Error>;
 
     /// Create a new `Namespace`.
@@ -59,19 +59,20 @@ pub trait LogStore: Send + Sync + 'static + std::fmt::Debug {
     async fn list_namespaces(&self) -> Result<Vec<Self::Namespace>, Self::Error>;
 
     /// Create an entry of the associate Entry type
-    fn entry<D: AsRef<[u8]>>(&self, data: D, id: Id, ns: Self::Namespace) -> Self::Entry;
+    fn entry<D: AsRef<[u8]>>(&self, data: D, entry_id: EntryId, ns: Self::Namespace)
+        -> Self::Entry;
 
     /// Create a namespace of the associate Namespace type
     // TODO(sunng87): confusion with `create_namespace`
-    fn namespace(&self, id: namespace::Id) -> Self::Namespace;
+    fn namespace(&self, ns_id: NamespaceId) -> Self::Namespace;
 
     /// Mark all entry ids `<=id` of given `namespace` as obsolete so that logstore can safely delete
     /// the log files if all entries inside are obsolete. This method may not delete log
     /// files immediately.
-    async fn obsolete(&self, namespace: Self::Namespace, id: Id) -> Result<(), Self::Error>;
+    async fn obsolete(&self, ns: Self::Namespace, entry_id: EntryId) -> Result<(), Self::Error>;
 }
 
 #[derive(Debug)]
 pub struct AppendResponse {
-    pub entry_id: Id,
+    pub entry_id: EntryId,
 }

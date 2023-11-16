@@ -163,12 +163,20 @@ mod tests {
             tcp_nodelay = true
 
             [wal]
+            provider = "RaftEngine"
+
+            [wal.raft_engine_opts]
             dir = "/tmp/greptimedb/wal"
             file_size = "1GB"
             purge_threshold = "50GB"
             purge_interval = "10m"
             read_batch_size = 128
             sync_write = false
+
+            [wal.kafka_opts]
+            broker_endpoints = ["127.0.0.1:9090"]
+            topic_name_prefix = "gt_kafka_topic"
+            num_partitions = 1
 
             [storage.compaction]
             max_inflight_tasks = 3
@@ -228,7 +236,7 @@ mod tests {
                     Some("42s"),
                 ),
                 (
-                    // wal.dir = /other/wal/dir
+                    // wal.raft_engine_opts.dir = /other/wal/dir
                     [
                         env_prefix.to_string(),
                         "wal".to_uppercase(),
@@ -278,7 +286,8 @@ mod tests {
                 );
 
                 // Should be the values from config file, not environment variables.
-                assert_eq!(opts.wal.dir.unwrap(), "/tmp/greptimedb/wal");
+                let wal_dir = opts.wal.raft_engine_opts.unwrap().dir.unwrap();
+                assert_eq!(wal_dir, "/tmp/greptimedb/wal");
 
                 // Should be default values.
                 assert_eq!(opts.node_id, None);
