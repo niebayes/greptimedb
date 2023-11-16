@@ -15,7 +15,6 @@
 #![feature(let_chains)]
 
 pub mod error;
-#[allow(dead_code, unused_variables)]
 pub mod kafka;
 mod noop;
 pub mod raft_engine;

@@ -17,6 +17,7 @@ use std::any::Any;
 use common_error::ext::ErrorExt;
 use common_macro::stack_trace_debug;
 use common_runtime::error::Error as RuntimeError;
+use rskafka::client::error::Error as RsKafkaError;
 use snafu::{Location, Snafu};
 
 #[derive(Snafu)]
@@ -84,6 +85,44 @@ pub enum Error {
         attempt_index: u64,
         location: Location,
     },
+
+    #[snafu(display(
+        "Failed to build a rskafka client, broker endpoints: {:?}",
+        broker_endpoints
+    ))]
+    BuildKafkaClient {
+        broker_endpoints: Vec<String>,
+        location: Location,
+        #[snafu(source)]
+        error: RsKafkaError,
+    },
+
+    #[snafu(display(
+        "Failed to build a rskafka partition client, topic: {}, partition: {}",
+        topic,
+        partition
+    ))]
+    BuildKafkaPartitionClient {
+        topic: String,
+        partition: i32,
+        location: Location,
+        #[snafu(source)]
+        error: RsKafkaError,
+    },
+
+    #[snafu(display(
+        "Failed to list all created topics, broker endpoints: {:?}",
+        broker_endpoints
+    ))]
+    ListCreatedKafkaTopics {
+        broker_endpoints: Vec<String>,
+        location: Location,
+        #[snafu(source)]
+        error: RsKafkaError,
+    },
+
+    #[snafu(display("Not all topics are ready"))]
+    KafkaTopicsNotReady { location: Location },
 }
 
 impl ErrorExt for Error {

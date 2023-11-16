@@ -22,8 +22,6 @@ pub mod error;
 pub mod event_listener;
 mod greptimedb_telemetry;
 pub mod heartbeat;
-#[allow(dead_code, unused_variables)]
-mod kafka;
 pub mod metrics;
 pub mod region_server;
 pub mod server;

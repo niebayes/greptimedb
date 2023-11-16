@@ -443,8 +443,18 @@ pub enum Error {
         location: Location,
     },
 
-    #[snafu(display("Missing required raft-engine options",))]
+    #[snafu(display("Missing required raft-engine options"))]
     MissingRaftEngineOpts { location: Location },
+
+    #[snafu(display("Missing required Kafka options"))]
+    MissingKafkaOpts { location: Location },
+
+    #[snafu(display("Failed to build a Kafka log store"))]
+    BuildKafkaLogStore {
+        location: Location,
+        #[snafu(source)]
+        error: log_store::error::Error,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -500,9 +510,10 @@ impl ErrorExt for Error {
             | MissingKvBackend { .. }
             | MissingMetaClient { .. } => StatusCode::InvalidArguments,
 
-            UnmatchedWalProviderAndMode { .. } | MissingRaftEngineOpts { .. } => {
-                StatusCode::InvalidArguments
-            }
+            UnmatchedWalProviderAndMode { .. }
+            | MissingRaftEngineOpts { .. }
+            | MissingKafkaOpts { .. }
+            | BuildKafkaLogStore { .. } => StatusCode::InvalidArguments,
 
             EncodeJson { .. } | PayloadNotExist { .. } | Unexpected { .. } => {
                 StatusCode::Unexpected

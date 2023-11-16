@@ -52,9 +52,10 @@ use tokio::sync::Notify;
 
 use crate::config::{DatanodeOptions, RegionEngineConfig};
 use crate::error::{
-    CreateDirSnafu, GetMetadataSnafu, MissingKvBackendSnafu, MissingMetaClientSnafu,
-    MissingMetasrvOptsSnafu, MissingNodeIdSnafu, MissingRaftEngineOptsSnafu, OpenLogStoreSnafu,
-    Result, RuntimeResourceSnafu, ShutdownInstanceSnafu, UnmatchedWalProviderAndModeSnafu,
+    BuildKafkaLogStoreSnafu, CreateDirSnafu, GetMetadataSnafu, MissingKafkaOptsSnafu,
+    MissingKvBackendSnafu, MissingMetaClientSnafu, MissingMetasrvOptsSnafu, MissingNodeIdSnafu,
+    MissingRaftEngineOptsSnafu, OpenLogStoreSnafu, Result, RuntimeResourceSnafu,
+    ShutdownInstanceSnafu, UnmatchedWalProviderAndModeSnafu,
 };
 use crate::event_listener::{
     new_region_server_event_channel, NoopRegionServerEventListener, RegionServerEventListenerRef,
@@ -457,9 +458,14 @@ impl DatanodeBuilder {
     }
 
     async fn build_kafka_log_store(
-        _kafka_opts: &Option<KafkaOptions>,
+        kafka_opts: &Option<KafkaOptions>,
     ) -> Result<Arc<KafkaLogStore>> {
-        unimplemented!()
+        let opts = kafka_opts.as_ref().context(MissingKafkaOptsSnafu)?;
+        Ok(Arc::new(
+            KafkaLogStore::try_new(opts)
+                .await
+                .context(BuildKafkaLogStoreSnafu)?,
+        ))
     }
 }
 

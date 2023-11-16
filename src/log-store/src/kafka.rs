@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod log_store;
+mod topic_client_manager;
 
 use store_api::logstore::entry::{Entry, Id as EntryId};
 use store_api::logstore::namespace::{Id as NamespaceId, Namespace};

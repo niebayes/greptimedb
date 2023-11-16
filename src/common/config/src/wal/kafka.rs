@@ -18,13 +18,13 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub struct KafkaOptions {
     /// The broker endpoints of the Kafka cluster.
-    broker_endpoints: Vec<String>,
+    pub broker_endpoints: Vec<String>,
     /// Number of topics shall be created beforehand.
-    num_topics: usize,
+    pub num_topics: usize,
     /// Topic name prefix.
-    topic_name_prefix: String,
+    pub topic_name_prefix: String,
     /// Number of partitions per topic.
-    num_partitions: i32,
+    pub num_partitions: i32,
 }
 
 impl Default for KafkaOptions {

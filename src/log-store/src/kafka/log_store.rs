@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
 use common_config::wal::kafka::KafkaOptions;
 use store_api::logstore::entry::Id as EntryId;
 use store_api::logstore::entry_stream::SendableEntryStream;
@@ -19,14 +21,21 @@ use store_api::logstore::namespace::Id as NamespaceId;
 use store_api::logstore::{AppendResponse, LogStore};
 
 use crate::error::{Error, Result};
+use crate::kafka::topic_client_manager::{TopicClientManager, TopicClientManagerRef};
 use crate::kafka::{EntryImpl, NamespaceImpl};
 
 #[derive(Debug)]
-pub struct KafkaLogStore {}
+pub struct KafkaLogStore {
+    kafka_opts: KafkaOptions,
+    topic_client_manager: TopicClientManagerRef,
+}
 
 impl KafkaLogStore {
-    pub fn try_new(kafka_opts: &KafkaOptions) -> Result<Self> {
-        unimplemented!()
+    pub async fn try_new(kafka_opts: &KafkaOptions) -> Result<Self> {
+        Ok(Self {
+            kafka_opts: kafka_opts.clone(),
+            topic_client_manager: Arc::new(TopicClientManager::try_new(&kafka_opts).await?),
+        })
     }
 }
 
