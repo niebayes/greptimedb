@@ -20,6 +20,8 @@ use common_meta::wal::kafka::KafkaTopic as Topic;
 use dashmap::mapref::entry::Entry as DashMapEntry;
 use dashmap::DashMap;
 use rskafka::client::partition::{PartitionClient, UnknownTopicHandling};
+use rskafka::client::producer::aggregator::RecordAggregator;
+use rskafka::client::producer::{BatchProducer, BatchProducerBuilder};
 use rskafka::client::{Client, ClientBuilder};
 use rskafka::BackoffConfig;
 use snafu::{ensure, ResultExt};
@@ -32,10 +34,34 @@ use crate::error::{
 // There's only one partition for each topic currently.
 const DEFAULT_PARTITION: i32 = 0;
 
-type TopicClientRef = Arc<PartitionClient>;
+#[derive(Debug)]
+pub struct TopicClient {
+    /// The raw client used to construct a batch producer and/or a stream consumer for a specific topic.
+    pub raw_client: Arc<PartitionClient>,
+    /// A producer used to buffer log entries for a specific topic.
+    pub producer: Arc<BatchProducer<RecordAggregator>>,
+}
+
+pub type TopicClientRef = Arc<TopicClient>;
+
+impl TopicClient {
+    pub fn new(raw_client: Arc<PartitionClient>, kafka_opts: &KafkaOptions) -> Self {
+        let record_aggregator = RecordAggregator::new(kafka_opts.max_batch_size);
+        let batch_producer = BatchProducerBuilder::new(raw_client.clone())
+            .with_compression(kafka_opts.compression.clone().into())
+            .with_linger(kafka_opts.linger)
+            .build(record_aggregator);
+
+        Self {
+            raw_client,
+            producer: Arc::new(batch_producer),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct TopicClientManager {
+    opts: KafkaOptions,
     client_factory: Client,
     topic_client_pool: DashMap<Topic, TopicClientRef>,
 }
@@ -66,6 +92,7 @@ impl TopicClientManager {
         );
 
         Ok(Self {
+            opts: kafka_opts.clone(),
             client_factory: kafka_client,
             topic_client_pool: DashMap::with_capacity(kafka_opts.num_topics),
         })
@@ -82,17 +109,22 @@ impl TopicClientManager {
     }
 
     async fn try_create_topic_client(&self, topic: &str) -> Result<TopicClientRef> {
-        self.client_factory
+        let raw_client = self
+            .client_factory
             .partition_client(topic, DEFAULT_PARTITION, UnknownTopicHandling::Retry)
             .await
             .context(BuildKafkaPartitionClientSnafu {
                 topic,
                 partition: DEFAULT_PARTITION,
             })
-            .map(Arc::new)
+            .map(Arc::new)?;
+
+        let topic_client = TopicClient::new(raw_client, &self.opts);
+        Ok(Arc::new(topic_client))
     }
 }
 
+// TODO(niebayes): add backoff on listing topics.
 async fn check_topics_ready(kafka_client: &Client, opts: &KafkaOptions) -> Result<bool> {
     let expected_topics = (0..opts.num_topics)
         .map(|topic_id| format!("{}_{}", opts.topic_name_prefix, topic_id))

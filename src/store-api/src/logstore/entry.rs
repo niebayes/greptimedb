@@ -31,5 +31,6 @@ pub trait Entry: Send + Sync {
     /// Return entry id that monotonically increments.
     fn id(&self) -> Id;
 
+    // TODO(niebayes): Shall change the return type to &Self::Namespace.
     fn namespace(&self) -> Self::Namespace;
 }

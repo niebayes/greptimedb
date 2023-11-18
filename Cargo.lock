@@ -1630,6 +1630,7 @@ dependencies = [
  "common-base",
  "common-meta",
  "humantime-serde",
+ "rskafka",
  "serde",
 ]
 
@@ -4431,6 +4432,7 @@ dependencies = [
  "raft-engine",
  "rand",
  "rskafka",
+ "serde_json",
  "snafu",
  "store-api",
  "tokio",

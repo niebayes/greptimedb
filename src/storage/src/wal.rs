@@ -95,6 +95,7 @@ impl<S: LogStore> Wal<S> {
     }
 }
 
+// TODO(niebayes): to be updated according to the new log store interfaces.
 impl<S: LogStore> Wal<S> {
     /// Data format:
     ///

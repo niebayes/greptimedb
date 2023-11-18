@@ -32,7 +32,6 @@ pub struct WalOptions {
     pub kafka_opts: Option<KafkaOptions>,
 }
 
-// FIXME(niebayes): Is toml able to handle Option properly?
 impl Default for WalOptions {
     fn default() -> Self {
         Self {

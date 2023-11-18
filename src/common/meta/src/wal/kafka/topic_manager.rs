@@ -112,7 +112,7 @@ async fn build_topic_pool(opts: &KafkaOptions, kv_backend: &KvBackendRef) -> Res
         .await
         .context(CreateKafkaTopicSnafu)?;
 
-    // FIXME(niebayes): current persistence strategy is all-or-none. Maybe we should increase the granularity.
+    // TODO(niebayes): current persistence strategy is all-or-none. Maybe we should increase the granularity.
     persist_created_topics(&topics, kv_backend).await?;
 
     Ok(topics)

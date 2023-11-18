@@ -16,9 +16,12 @@ use std::any::Any;
 
 use common_error::ext::ErrorExt;
 use common_macro::stack_trace_debug;
+use common_meta::wal::kafka::KafkaTopic;
 use common_runtime::error::Error as RuntimeError;
 use rskafka::client::error::Error as RsKafkaError;
 use snafu::{Location, Snafu};
+use store_api::logstore::entry::Id as EntryId;
+use store_api::storage::RegionId;
 
 #[derive(Snafu)]
 #[snafu(visibility(pub))]
@@ -123,6 +126,129 @@ pub enum Error {
 
     #[snafu(display("Not all topics are ready"))]
     KafkaTopicsNotReady { location: Location },
+
+    #[snafu(display(
+        "Failed to get a Kafka topic client, topic: {}, region id: {}",
+        topic,
+        region_id
+    ))]
+    GetKafkaTopicClient {
+        topic: KafkaTopic,
+        region_id: RegionId,
+        location: Location,
+    },
+
+    #[snafu(display(
+        "Failed to write entries to Kafka, topic: {}, region id: {}",
+        topic,
+        region_id
+    ))]
+    WriteEntriesToKafka {
+        topic: KafkaTopic,
+        region_id: RegionId,
+        location: Location,
+        #[snafu(source)]
+        error: rskafka::client::producer::Error,
+    },
+
+    #[snafu(display("Failed to serialize a region id, region id: {}", region_id))]
+    SerRegionId {
+        region_id: RegionId,
+        location: Location,
+        #[snafu(source)]
+        error: serde_json::Error,
+    },
+
+    #[snafu(display("Failed to deserialize a region id from a record {:?}", record))]
+    DeserRegionId {
+        record: rskafka::record::Record,
+        location: Location,
+        #[snafu(source)]
+        error: serde_json::Error,
+    },
+
+    #[snafu(display("Failed to serialize an entry id, entry id: {}", entry_id))]
+    SerEntryId {
+        entry_id: EntryId,
+        location: Location,
+        #[snafu(source)]
+        error: serde_json::Error,
+    },
+
+    #[snafu(display("Failed to deserialize an entry id from a record {:?}", record))]
+    DeserEntryId {
+        record: rskafka::record::Record,
+        location: Location,
+        #[snafu(source)]
+        error: serde_json::Error,
+    },
+
+    #[snafu(display("Failed to serialize a topic, topic: {}", topic))]
+    SerTopic {
+        topic: KafkaTopic,
+        location: Location,
+        #[snafu(source)]
+        error: serde_json::Error,
+    },
+
+    #[snafu(display("Failed to deserialize a topic from a record {:?}", record))]
+    DeserTopic {
+        record: rskafka::record::Record,
+        location: Location,
+        #[snafu(source)]
+        error: serde_json::Error,
+    },
+
+    #[snafu(display("Missing required value in a record {:?}", record))]
+    MissingRecordValue {
+        record: rskafka::record::Record,
+        location: Location,
+    },
+
+    #[snafu(display(
+        "Missing required entry id header in a record header, record: {:?}",
+        record
+    ))]
+    MissingEntryId {
+        record: rskafka::record::Record,
+        location: Location,
+    },
+
+    #[snafu(display("Missing required topic in a record header, record: {:?}", record))]
+    MissingTopic {
+        record: rskafka::record::Record,
+        location: Location,
+    },
+
+    #[snafu(display("Missing required region id in a record header, record: {:?}", record))]
+    MissingRegionId {
+        record: rskafka::record::Record,
+        location: Location,
+    },
+
+    #[snafu(display(
+        "Failed to convert an entry id into a Kafka offset, entry id: {}",
+        entry_id
+    ))]
+    ConvertEntryIdToOffset {
+        entry_id: EntryId,
+        location: Location,
+    },
+
+    #[snafu(display(
+        "Failed to read a record from Kafka, start offset {}, topic: {}, region id: {}",
+        start_offset,
+        topic,
+        region_id,
+    ))]
+    ReadRecordFromKafka {
+        start_offset: i64,
+        topic: String,
+        region_id: RegionId,
+        location: Location,
+        #[snafu(source)]
+        error: RsKafkaError,
+    },
 }
 
 impl ErrorExt for Error {

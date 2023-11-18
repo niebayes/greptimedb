@@ -8,4 +8,5 @@ license.workspace = true
 common-base.workspace = true
 common-meta.workspace = true
 humantime-serde.workspace = true
+rskafka.workspace = true
 serde.workspace = true

@@ -12,8 +12,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::time::Duration;
+
+use rskafka::client::partition::Compression as RsKafkaCompression;
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum Compression {
+    NoCompression,
+    Gzip,
+    Lz4,
+    Snappy,
+    Zstd,
+}
+
+impl From<Compression> for RsKafkaCompression {
+    fn from(compression: Compression) -> Self {
+        match compression {
+            Compression::NoCompression => RsKafkaCompression::NoCompression,
+            Compression::Gzip => RsKafkaCompression::Gzip,
+            Compression::Lz4 => RsKafkaCompression::Lz4,
+            Compression::Snappy => RsKafkaCompression::Snappy,
+            Compression::Zstd => RsKafkaCompression::Zstd,
+        }
+    }
+}
+
+// TODO(niebayes): update config file accordingly.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct KafkaOptions {
@@ -25,6 +50,14 @@ pub struct KafkaOptions {
     pub topic_name_prefix: String,
     /// Number of partitions per topic.
     pub num_partitions: i32,
+    /// The compression algorithm used to compress log entries.
+    pub compression: Compression,
+    /// The maximum log size an rskakfa batch producer could buffer.
+    pub max_batch_size: usize,
+    /// The linger duration of an rskafka batch producer.
+    pub linger: Duration,
+    /// The maximum amount of time (in milliseconds) to wait for Kafka records before returning.
+    pub max_wait_time: i32,
 }
 
 impl Default for KafkaOptions {
@@ -34,6 +67,10 @@ impl Default for KafkaOptions {
             num_topics: 64,
             topic_name_prefix: "gt_kafka_topic".to_string(),
             num_partitions: 1,
+            compression: Compression::NoCompression,
+            max_batch_size: 4 * 1024 * 1024,    // 4MB.
+            linger: Duration::from_millis(200), // 200ms.
+            max_wait_time: 100,                 // 100ms.
         }
     }
 }
