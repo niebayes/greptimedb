@@ -70,7 +70,6 @@ impl Region {
         }
     }
 
-    // TODO(niebayes): maybe compute once and cache the result.
     pub fn entry_estimated_size(entry: &WalEntry) -> usize {
         let wrapper_size = size_of::<WalEntry>()
             + entry.mutations.capacity() * size_of::<Mutation>()
