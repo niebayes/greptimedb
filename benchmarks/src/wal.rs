@@ -13,4 +13,3 @@
 // limitations under the License.
 
 pub mod region;
-pub mod region_worker;

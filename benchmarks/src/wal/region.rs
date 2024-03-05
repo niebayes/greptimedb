@@ -14,15 +14,20 @@
 
 use std::mem::size_of;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use api::v1::value::ValueData;
 use api::v1::{ColumnDataType, ColumnSchema, Mutation, OpType, Row, Rows, Value, WalEntry};
 use common_wal::options::WalOptions;
+use futures::StreamExt;
+use mito2::wal::{Wal, WalWriter};
 use rand::distributions::{Alphanumeric, DistString, Uniform};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
+use store_api::logstore::LogStore;
 use store_api::storage::RegionId;
+
+use crate::metrics;
 
 pub struct Region {
     pub id: RegionId,
@@ -55,7 +60,7 @@ impl Region {
         }
     }
 
-    pub fn scrape(&self) -> WalEntry {
+    pub fn add_wal_entry<S: LogStore>(&self, wal_writer: &mut WalWriter<S>) {
         let num_rows = self.rows_factor * 5;
         let mutation = Mutation {
             op_type: OpType::Put as i32,
@@ -64,9 +69,26 @@ impl Region {
                 .fetch_add(num_rows as u64, Ordering::Relaxed),
             rows: Some(self.build_rows(num_rows)),
         };
-
-        WalEntry {
+        let entry = WalEntry {
             mutations: vec![mutation],
+        };
+        metrics::METRIC_WAL_WRITE_BYTES_TOTAL.inc_by(Self::entry_estimated_size(&entry) as u64);
+
+        wal_writer
+            .add_entry(
+                self.id,
+                self.next_entry_id.fetch_add(1, Ordering::Relaxed),
+                &entry,
+                &self.wal_options,
+            )
+            .unwrap();
+    }
+
+    pub async fn replay<S: LogStore>(&self, wal: &Arc<Wal<S>>) {
+        let mut wal_stream = wal.scan(self.id, 0, &self.wal_options).unwrap();
+        while let Some(res) = wal_stream.next().await {
+            let (_, entry) = res.unwrap();
+            metrics::METRIC_WAL_READ_BYTES_TOTAL.inc_by(Self::entry_estimated_size(&entry) as u64);
         }
     }
 
