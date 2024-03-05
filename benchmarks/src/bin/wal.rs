@@ -70,7 +70,7 @@ struct Args {
     #[clap(long, short = 'b', default_value = "localhost:9092")]
     bootstrap_brokers: String,
 
-    #[clap(long, default_value_t = 10)]
+    #[clap(long, default_value_t = num_cpus::get() as u32)]
     num_workers: u32,
 
     #[clap(long, default_value_t = 16)]
@@ -101,6 +101,9 @@ struct Args {
     skip_write: bool,
 
     #[clap(long, default_value_t = false)]
+    random_topics: bool,
+
+    #[clap(long, default_value_t = false)]
     report_metrics: bool,
 }
 
@@ -120,6 +123,7 @@ struct Config {
     workload: Workload,
     skip_read: bool,
     skip_write: bool,
+    random_topics: bool,
     report_metrics: bool,
 }
 
@@ -428,8 +432,12 @@ fn main() {
         workload: args.workload,
         skip_read: args.skip_read,
         skip_write: args.skip_write,
+        random_topics: args.random_topics,
         report_metrics: args.report_metrics,
     };
+    if !cfg.dedicated && cfg.wal_provider == WalProvider::RaftEngine {
+        panic!("Benchmarker has to be run in the dedicated mode for raft-engine");
+    }
     assert!(
         cfg.num_workers
             .min(cfg.num_topics)
@@ -455,7 +463,15 @@ fn main() {
                     let ctrl_client = client.controller_client().unwrap();
                     let (topics, tasks): (Vec<_>, Vec<_>) = (0..cfg.num_topics)
                         .map(|i| {
-                            let topic = format!("greptime_wal_topic_{}", i);
+                            let topic = if cfg.random_topics {
+                                format!(
+                                    "greptime_wal_bench_topic_{}_{}",
+                                    uuid::Uuid::new_v4().as_u128(),
+                                    i
+                                )
+                            } else {
+                                format!("greptime_wal_bench_topic_{}", i)
+                            };
                             let task = ctrl_client.create_topic(
                                 topic.clone(),
                                 1,
@@ -491,11 +507,7 @@ fn main() {
                     .map(Arc::new)
                     .unwrap();
                     let wal = Arc::new(Wal::new(store));
-
-                    match cfg.dedicated {
-                        true => Benchmarker::run_dedicated(&cfg, &[], wal).await,
-                        false => Benchmarker::run_steal(&cfg, &[], wal).await,
-                    }
+                    Benchmarker::run_dedicated(&cfg, &[], wal).await;
                 }
             }
         });
