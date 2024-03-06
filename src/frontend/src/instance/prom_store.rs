@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use api::prom_store::remote::read_request::ResponseType;
 use api::prom_store::remote::{Query, QueryResult, ReadRequest, ReadResponse, WriteRequest};
+use api::v1::RowInsertRequests;
 use async_trait::async_trait;
 use auth::{PermissionChecker, PermissionCheckerRef, PermissionReq};
 use common_catalog::format_full_table_name;
@@ -23,12 +24,13 @@ use common_error::ext::BoxedError;
 use common_query::prelude::GREPTIME_PHYSICAL_TABLE;
 use common_query::Output;
 use common_recordbatch::RecordBatches;
-use common_telemetry::logging;
+use common_telemetry::{logging, tracing};
 use operator::insert::InserterRef;
 use operator::statement::StatementExecutor;
 use prost::Message;
 use servers::error::{self, AuthSnafu, Result as ServerResult};
 use servers::http::prom_store::PHYSICAL_TABLE_PARAM;
+use servers::interceptor::{PromStoreProtocolInterceptor, PromStoreProtocolInterceptorRef};
 use servers::prom_store::{self, Metrics};
 use servers::query_handler::{
     PromStoreProtocolHandler, PromStoreProtocolHandlerRef, PromStoreResponse,
@@ -87,6 +89,7 @@ async fn to_query_result(table_name: &str, output: Output) -> ServerResult<Query
 }
 
 impl Instance {
+    #[tracing::instrument(skip_all)]
     async fn handle_remote_query(
         &self,
         ctx: &QueryContextRef,
@@ -126,6 +129,7 @@ impl Instance {
             .context(ExecLogicalPlanSnafu)
     }
 
+    #[tracing::instrument(skip_all)]
     async fn handle_remote_queries(
         &self,
         ctx: QueryContextRef,
@@ -166,8 +170,12 @@ impl PromStoreProtocolHandler for Instance {
             .as_ref()
             .check_permission(ctx.current_user(), PermissionReq::PromStoreWrite)
             .context(AuthSnafu)?;
+        let interceptor_ref = self
+            .plugins
+            .get::<PromStoreProtocolInterceptorRef<servers::error::Error>>();
+        interceptor_ref.pre_write(&request, ctx.clone())?;
 
-        let (requests, samples) = prom_store::to_grpc_row_insert_requests(request)?;
+        let (requests, samples) = prom_store::to_grpc_row_insert_requests(&request)?;
         if with_metric_engine {
             let physical_table = ctx
                 .extension(PHYSICAL_TABLE_PARAM)
@@ -190,6 +198,38 @@ impl PromStoreProtocolHandler for Instance {
         Ok(())
     }
 
+    async fn write_fast(
+        &self,
+        request: RowInsertRequests,
+        ctx: QueryContextRef,
+        with_metric_engine: bool,
+    ) -> ServerResult<()> {
+        self.plugins
+            .get::<PermissionCheckerRef>()
+            .as_ref()
+            .check_permission(ctx.current_user(), PermissionReq::PromStoreWrite)
+            .context(AuthSnafu)?;
+
+        if with_metric_engine {
+            let physical_table = ctx
+                .extension(PHYSICAL_TABLE_PARAM)
+                .unwrap_or(GREPTIME_PHYSICAL_TABLE)
+                .to_string();
+            let _ = self
+                .handle_metric_row_inserts(request, ctx.clone(), physical_table.to_string())
+                .await
+                .map_err(BoxedError::new)
+                .context(error::ExecuteGrpcQuerySnafu)?;
+        } else {
+            let _ = self
+                .handle_row_inserts(request, ctx.clone())
+                .await
+                .map_err(BoxedError::new)
+                .context(error::ExecuteGrpcQuerySnafu)?;
+        }
+        Ok(())
+    }
+
     async fn read(
         &self,
         request: ReadRequest,
@@ -200,6 +240,10 @@ impl PromStoreProtocolHandler for Instance {
             .as_ref()
             .check_permission(ctx.current_user(), PermissionReq::PromStoreRead)
             .context(AuthSnafu)?;
+        let interceptor_ref = self
+            .plugins
+            .get::<PromStoreProtocolInterceptorRef<servers::error::Error>>();
+        interceptor_ref.pre_read(&request, ctx.clone())?;
 
         let response_type = negotiate_response_type(&request.accepted_response_types)?;
 
@@ -265,7 +309,7 @@ impl PromStoreProtocolHandler for ExportMetricHandler {
         ctx: QueryContextRef,
         _: bool,
     ) -> ServerResult<()> {
-        let (requests, _) = prom_store::to_grpc_row_insert_requests(request)?;
+        let (requests, _) = prom_store::to_grpc_row_insert_requests(&request)?;
         self.inserter
             .handle_metric_row_inserts(
                 requests,
@@ -277,6 +321,15 @@ impl PromStoreProtocolHandler for ExportMetricHandler {
             .map_err(BoxedError::new)
             .context(error::ExecuteGrpcQuerySnafu)?;
         Ok(())
+    }
+
+    async fn write_fast(
+        &self,
+        _request: RowInsertRequests,
+        _ctx: QueryContextRef,
+        _with_metric_engine: bool,
+    ) -> ServerResult<()> {
+        unimplemented!()
     }
 
     async fn read(

@@ -91,7 +91,7 @@ env:
   # The scheduled version is '${{ env.NEXT_RELEASE_VERSION }}-nightly-YYYYMMDD', like v0.2.0-nigthly-20230313;
   NIGHTLY_RELEASE_PREFIX: nightly
   # Note: The NEXT_RELEASE_VERSION should be modified manually by every formal release.
-  NEXT_RELEASE_VERSION: v0.7.0
+  NEXT_RELEASE_VERSION: v0.8.0
 
 jobs:
   allocate-runners:
@@ -288,7 +288,7 @@ jobs:
       - name: Set build windows result
         id: set-build-windows-result
         run: |
-          echo "build-windows-result=success" >> $GITHUB_OUTPUT    
+          echo "build-windows-result=success" >> $Env:GITHUB_OUTPUT
 
   release-images-to-dockerhub:
     name: Build and push images to DockerHub
