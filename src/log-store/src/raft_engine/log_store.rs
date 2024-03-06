@@ -327,9 +327,6 @@ impl LogStore for RaftEngineLogStore {
                             start_index = last_entry.id + 1;
                         }
 
-                        metrics::METRIC_RAFT_ENGINE_READ_BYTES_TOTAL
-                            .inc_by(vec.iter().map(entry_estimated_size).sum::<usize>() as u64);
-
                         // reader side closed, cancel following reads
                         if tx.send(Ok(vec)).await.is_err() {
                             break;

@@ -97,8 +97,7 @@ impl TryFrom<Record> for KafkaRecord {
     }
 }
 
-// TODO(niebayes): Decode KafkaRecord to Record requires a lot of cpus.
-// we may use prost endec to coincidence with the add_entry.
+// TODO(niebayes): improve the performance of decoding kafka record.
 impl TryFrom<KafkaRecord> for Record {
     type Error = crate::error::Error;
 
@@ -168,7 +167,7 @@ impl RecordProducer {
             })?
             .producer;
 
-        // TODO(niebayes): maybe requires some more fine-grained metrics to measure stages of writing to kafka.
+        // TODO(niebayes): maybe requires more fine-grained metrics to measure stages of writing to kafka.
 
         // Stores the offset of the last successfully produced record.
         let mut last_offset = None;

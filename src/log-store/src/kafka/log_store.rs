@@ -193,7 +193,7 @@ impl LogStore for KafkaLogStore {
                     })?;
                 let (kafka_record, offset) = (record_and_offset.record, record_and_offset.offset);
 
-                metrics::METRIC_KAFKA_READ_BYTES_TOTAL
+                metrics::METRIC_KAFKA_READ_RECORD_BYTES_TOTAL
                     .inc_by(kafka_record.approximate_size() as u64);
 
                 debug!(

@@ -21,7 +21,7 @@ pub const LOGSTORE_LABEL: &str = "logstore";
 pub const OPTYPE_LABEL: &str = "optype";
 
 lazy_static! {
-    /// Counters of bytes of each logstore operation on a logstore.
+    /// Counters of bytes of each operation on a logstore.
     pub static ref METRIC_LOGSTORE_OP_BYTES_TOTAL: IntCounterVec = register_int_counter_vec!(
         "greptime_logstore_op_bytes_total",
         "logstore operation bytes total",
@@ -45,7 +45,13 @@ lazy_static! {
         &["raft-engine", "read"],
     );
 
-    /// Counters of calls of each logstore operation on a logstore.
+    /// Counter of bytes of the records read by the kafka logstore.
+    pub static ref METRIC_KAFKA_READ_RECORD_BYTES_TOTAL: IntCounter = register_int_counter!(
+        "greptime_kafka_read_record_bytes_total",
+        "kafka read record bytes total"
+    ).unwrap();
+
+    /// Counters of calls of each operation on a logstore.
     pub static ref METRIC_LOGSTORE_OP_CALLS_TOTAL: IntCounterVec = register_int_counter_vec!(
         "greptime_logstore_op_calls_total",
         "logstore operation calls total",

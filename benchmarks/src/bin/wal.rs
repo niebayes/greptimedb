@@ -45,6 +45,7 @@ enum WalProvider {
     RaftEngine,
 }
 
+/// The workload determines the size of each wal entry.
 #[derive(Clone, ValueEnum, Default, Debug)]
 enum Workload {
     /// 5 rows, 4 cols.
@@ -59,50 +60,70 @@ enum Workload {
 }
 
 #[derive(Parser)]
-#[command(name = "Wal benchmarker")]
 struct Args {
+    /// There are two modes to run the benchmarker:
+    /// - dedicated: regions are separated into several disjoint sets and each set of regions is bound to a dedicated worker.
+    /// - steal: regions are not separated and could be handled by any worker.
     #[clap(long, default_value_t = false)]
     dedicated: bool,
 
+    /// The wal provider.
     #[clap(long, value_enum, default_value_t = WalProvider::default())]
     wal_provider: WalProvider,
 
+    /// The advertised addresses of the kafka brokers.
     #[clap(long, short = 'b', default_value = "localhost:9092")]
     bootstrap_brokers: String,
 
+    /// The number of workers each running a dedicated thread.
     #[clap(long, default_value_t = num_cpus::get() as u32)]
     num_workers: u32,
 
+    /// The number of kafka topics to be created.
     #[clap(long, default_value_t = 16)]
     num_topics: u32,
 
+    /// The number of regions.
     #[clap(long, default_value_t = 1000)]
     num_regions: u32,
 
+    /// The number of times each region is scraped.
+    /// The total number of bytes written into the wal are identical for both modes.
+    /// However, in dedicated mode, the number of writes would be larger than or equal to that in the steal mode.
     #[clap(long, default_value_t = 1000)]
     num_scrapes: u32,
 
+    /// The maximum size of a batch of kafka records.
     #[clap(long, default_value_t = 1)]
     max_batch_size: u64,
 
+    /// The minimum latency the kafka client issues a batch of kafka records.
+    /// However, a batch of kafka records would be immediately issued if its free space cannot fit the next record.
     #[clap(long, default_value_t = 20)]
     linger: u64,
 
+    /// The seed of random number generators.
     #[clap(long, default_value_t = 42)]
     rng_seed: u64,
 
+    /// The write workload.
     #[clap(long, value_enum, default_value_t = Workload::default())]
     workload: Workload,
 
+    /// Skips the read phase, aka. region replay, if set to true.
     #[clap(long, default_value_t = false)]
     skip_read: bool,
 
+    /// Skips the write phase if set to true.
     #[clap(long, default_value_t = false)]
     skip_write: bool,
 
+    /// Randomly generates topic names if set to true.
+    /// Useful when you want to run the benchmarker wihtout worrying about the topics created before.
     #[clap(long, default_value_t = false)]
     random_topics: bool,
 
+    /// Logs out the gathered prometheus metrics when the benchmarker ends.
     #[clap(long, default_value_t = false)]
     report_metrics: bool,
 }
@@ -130,28 +151,15 @@ struct Config {
 struct Benchmarker;
 
 impl Benchmarker {
-    /// Each region is bound to a worker.
     async fn run_dedicated<S: LogStore>(cfg: &Config, topics: &[String], wal: Arc<Wal<S>>) {
-        let (rows_factor, cols_factor) = parse_workload(&cfg.workload);
-        let mut rng: SmallRng = SmallRng::seed_from_u64(cfg.rng_seed);
         let chunk_size = (cfg.num_regions as f32 / cfg.num_workers as f32).ceil() as usize;
         let region_chunks = (0..cfg.num_regions)
             .map(|id| {
-                let wal_options = match cfg.wal_provider {
-                    WalProvider::Kafka => {
-                        assert!(!topics.is_empty());
-                        WalOptions::Kafka(KafkaWalOptions {
-                            topic: topics.get(id as usize % topics.len()).cloned().unwrap(),
-                        })
-                    }
-                    WalProvider::RaftEngine => WalOptions::RaftEngine,
-                };
-                Region::new(
-                    RegionId::from_u64(id as u64),
-                    build_schema(cols_factor, &mut rng),
-                    wal_options,
-                    rows_factor,
-                    cfg.rng_seed,
+                build_region(
+                    id as u64,
+                    topics,
+                    &mut SmallRng::seed_from_u64(cfg.rng_seed),
+                    &cfg,
                 )
             })
             .chunks(chunk_size)
@@ -166,27 +174,25 @@ impl Benchmarker {
             info!("Benchmarking write ...");
 
             let barrier = Arc::new(Barrier::new(cfg.num_workers as usize));
-            let write_start = Instant::now();
             let num_scrapes = cfg.num_scrapes;
+            let write_start = Instant::now();
 
-            let writers = (0..cfg.num_workers)
-                .map(|i| {
-                    let barrier = barrier.clone();
-                    let wal = wal.clone();
-                    let regions = region_chunks[i as usize].clone();
-                    tokio::spawn(async move {
-                        barrier.wait().await;
-                        for _ in 0..num_scrapes {
-                            let mut wal_writer = wal.writer();
-                            regions
-                                .iter()
-                                .for_each(|region| region.add_wal_entry(&mut wal_writer));
-                            wal_writer.write_to_wal().await.unwrap();
-                        }
-                    })
+            futures::future::join_all((0..cfg.num_workers).map(|i| {
+                let barrier = barrier.clone();
+                let wal = wal.clone();
+                let regions = region_chunks[i as usize].clone();
+                tokio::spawn(async move {
+                    barrier.wait().await;
+                    for _ in 0..num_scrapes {
+                        let mut wal_writer = wal.writer();
+                        regions
+                            .iter()
+                            .for_each(|region| region.add_wal_entry(&mut wal_writer));
+                        wal_writer.write_to_wal().await.unwrap();
+                    }
                 })
-                .collect::<Vec<_>>();
-            futures::future::join_all(writers).await;
+            }))
+            .await;
 
             write_elapsed = write_start.elapsed().as_millis();
             assert!(write_elapsed > 0);
@@ -198,20 +204,18 @@ impl Benchmarker {
             let barrier = Arc::new(Barrier::new(cfg.num_workers as usize));
             let read_start = Instant::now();
 
-            let readers = (0..cfg.num_workers)
-                .map(|i| {
-                    let barrier = barrier.clone();
-                    let wal = wal.clone();
-                    let regions = region_chunks[i as usize].clone();
-                    tokio::spawn(async move {
-                        barrier.wait().await;
-                        for region in regions.iter() {
-                            region.replay(&wal).await;
-                        }
-                    })
+            futures::future::join_all((0..cfg.num_workers).map(|i| {
+                let barrier = barrier.clone();
+                let wal = wal.clone();
+                let regions = region_chunks[i as usize].clone();
+                tokio::spawn(async move {
+                    barrier.wait().await;
+                    for region in regions.iter() {
+                        region.replay(&wal).await;
+                    }
                 })
-                .collect::<Vec<_>>();
-            futures::future::join_all(readers).await;
+            }))
+            .await;
 
             read_elapsed = read_start.elapsed().as_millis();
             assert!(read_elapsed > 0);
@@ -220,27 +224,14 @@ impl Benchmarker {
         dump_report(cfg, write_elapsed, read_elapsed);
     }
 
-    /// Each region is not bound to worker.
     async fn run_steal<S: LogStore>(cfg: &Config, topics: &[String], wal: Arc<Wal<S>>) {
-        let (rows_factor, cols_factor) = parse_workload(&cfg.workload);
-        let mut rng = SmallRng::seed_from_u64(cfg.rng_seed);
         let regions = (0..cfg.num_regions)
             .map(|id| {
-                let wal_options = match cfg.wal_provider {
-                    WalProvider::Kafka => {
-                        assert!(!topics.is_empty());
-                        WalOptions::Kafka(KafkaWalOptions {
-                            topic: topics.get(id as usize % topics.len()).cloned().unwrap(),
-                        })
-                    }
-                    WalProvider::RaftEngine => WalOptions::RaftEngine,
-                };
-                Region::new(
-                    RegionId::from_u64(id as u64),
-                    build_schema(cols_factor, &mut rng),
-                    wal_options,
-                    rows_factor,
-                    cfg.rng_seed,
+                build_region(
+                    id as u64,
+                    topics,
+                    &mut SmallRng::seed_from_u64(cfg.rng_seed),
+                    &cfg,
                 )
             })
             .collect::<Vec<_>>();
@@ -258,26 +249,24 @@ impl Benchmarker {
 
             let write_start = Instant::now();
 
-            let writers = (0..cfg.num_workers)
-                .map(|_| {
-                    let barrier = barrier.clone();
-                    let scrapes = scrapes.clone();
-                    let wal = wal.clone();
-                    let regions = regions.clone();
+            futures::future::join_all((0..cfg.num_workers).map(|_| {
+                let barrier = barrier.clone();
+                let scrapes = scrapes.clone();
+                let wal = wal.clone();
+                let regions = regions.clone();
 
-                    tokio::spawn(async move {
-                        barrier.wait().await;
-                        while scrapes.fetch_add(1, Ordering::Relaxed) < num_scrapes {
-                            let mut wal_writer = wal.writer();
-                            regions
-                                .iter()
-                                .for_each(|region| region.add_wal_entry(&mut wal_writer));
-                            wal_writer.write_to_wal().await.unwrap();
-                        }
-                    })
+                tokio::spawn(async move {
+                    barrier.wait().await;
+                    while scrapes.fetch_add(1, Ordering::Relaxed) < num_scrapes {
+                        let mut wal_writer = wal.writer();
+                        regions
+                            .iter()
+                            .for_each(|region| region.add_wal_entry(&mut wal_writer));
+                        wal_writer.write_to_wal().await.unwrap();
+                    }
                 })
-                .collect::<Vec<_>>();
-            futures::future::join_all(writers).await;
+            }))
+            .await;
 
             write_elapsed = write_start.elapsed().as_millis();
             assert!(write_elapsed > 0);
@@ -292,26 +281,24 @@ impl Benchmarker {
 
             let read_start = Instant::now();
 
-            let readers = (0..cfg.num_workers)
-                .map(|_| {
-                    let barrier = barrier.clone();
-                    let next_replay = next_replay.clone();
-                    let wal = wal.clone();
-                    let regions = regions.clone();
+            futures::future::join_all((0..cfg.num_workers).map(|_| {
+                let barrier = barrier.clone();
+                let next_replay = next_replay.clone();
+                let wal = wal.clone();
+                let regions = regions.clone();
 
-                    tokio::spawn(async move {
-                        barrier.wait().await;
-                        loop {
-                            let i = next_replay.fetch_add(1, Ordering::Relaxed);
-                            if i >= num_regions as usize {
-                                break;
-                            }
-                            regions[i].replay(&wal).await;
+                tokio::spawn(async move {
+                    barrier.wait().await;
+                    loop {
+                        let i = next_replay.fetch_add(1, Ordering::Relaxed);
+                        if i >= num_regions as usize {
+                            break;
                         }
-                    })
+                        regions[i].replay(&wal).await;
+                    }
                 })
-                .collect::<Vec<_>>();
-            futures::future::join_all(readers).await;
+            }))
+            .await;
 
             read_elapsed = read_start.elapsed().as_millis();
             assert!(read_elapsed > 0);
@@ -322,6 +309,8 @@ impl Benchmarker {
 }
 
 fn parse_workload(workload: &Workload) -> (usize, usize) {
+    // Normally, a wal entry contains mutations of 5 rows and 4 cols.
+    // The factors controls how a wal entry is inflated.
     let (rows_factor, cols_factor) = match workload {
         Workload::Normal => (1, 1),
         Workload::Fat => (1, 5),
@@ -330,6 +319,26 @@ fn parse_workload(workload: &Workload) -> (usize, usize) {
     };
     assert!(rows_factor > 0 && cols_factor > 0);
     (rows_factor, cols_factor)
+}
+
+fn build_region(id: u64, topics: &[String], rng: &mut SmallRng, cfg: &Config) -> Region {
+    let (rows_factor, cols_factor) = parse_workload(&cfg.workload);
+    let wal_options = match cfg.wal_provider {
+        WalProvider::Kafka => {
+            assert!(!topics.is_empty());
+            WalOptions::Kafka(KafkaWalOptions {
+                topic: topics.get(id as usize % topics.len()).cloned().unwrap(),
+            })
+        }
+        WalProvider::RaftEngine => WalOptions::RaftEngine,
+    };
+    Region::new(
+        RegionId::from_u64(id),
+        build_schema(cols_factor, rng),
+        wal_options,
+        rows_factor,
+        cfg.rng_seed,
+    )
 }
 
 fn build_schema(cols_factor: usize, mut rng: &mut SmallRng) -> Vec<ColumnSchema> {
@@ -499,6 +508,7 @@ fn main() {
                     }
                 }
                 WalProvider::RaftEngine => {
+                    // The benchmarker assumes the raft engine directory exists.
                     let store = RaftEngineLogStore::try_new(
                         "/tmp/greptimedb/raft-engine-wal".to_string(),
                         RaftEngineConfig::default(),

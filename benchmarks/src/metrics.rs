@@ -21,7 +21,7 @@ pub const LOGSTORE_LABEL: &str = "logstore";
 pub const OPTYPE_LABEL: &str = "optype";
 
 lazy_static! {
-    /// Counters of bytes of each logstore operation on a logstore.
+    /// Counters of bytes of each operation on a logstore.
     pub static ref METRIC_WAL_OP_BYTES_TOTAL: IntCounterVec = register_int_counter_vec!(
         "greptime_bench_wal_op_bytes_total",
         "wal operation bytes total",
@@ -37,8 +37,7 @@ lazy_static! {
         &["read"],
     );
 
-    // TODO(niebayes): figure out the unit of timers. It states it's 1 second but it seems actually it's 0.1 second.
-    /// Timer of operations on a logstore.
+    /// Timer of each operation on a logstore.
     pub static ref METRIC_LOGSTORE_OP_ELAPSED: HistogramVec = register_histogram_vec!(
         "greptime_bench_logstore_op_elapsed",
         "logstore operation elapsed",
