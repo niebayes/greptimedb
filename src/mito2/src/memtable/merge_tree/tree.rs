@@ -124,7 +124,7 @@ impl MergeTree {
 
             if !has_pk {
                 // No primary key.
-                self.write_no_key(kv);
+                self.write_no_key(kv)?;
                 continue;
             }
 
@@ -144,6 +144,54 @@ impl MergeTree {
 
         metrics.value_bytes +=
             kvs.num_rows() * (std::mem::size_of::<Timestamp>() + std::mem::size_of::<OpType>());
+
+        Ok(())
+    }
+
+    /// Write one key value pair into the tree.
+    ///
+    /// # Panics
+    /// Panics if the tree is immutable (frozen).
+    pub fn write_one(
+        &self,
+        kv: KeyValue,
+        pk_buffer: &mut Vec<u8>,
+        metrics: &mut WriteMetrics,
+    ) -> Result<()> {
+        let has_pk = !self.metadata.primary_key.is_empty();
+
+        ensure!(
+            kv.num_primary_keys() == self.row_codec.num_fields(),
+            PrimaryKeyLengthMismatchSnafu {
+                expect: self.row_codec.num_fields(),
+                actual: kv.num_primary_keys(),
+            }
+        );
+        // Safety: timestamp of kv must be both present and a valid timestamp value.
+        let ts = kv.timestamp().as_timestamp().unwrap().unwrap().value();
+        metrics.min_ts = metrics.min_ts.min(ts);
+        metrics.max_ts = metrics.max_ts.max(ts);
+        metrics.value_bytes += kv.fields().map(|v| v.data_size()).sum::<usize>();
+
+        if !has_pk {
+            // No primary key.
+            return self.write_no_key(kv);
+        }
+
+        // Encode primary key.
+        pk_buffer.clear();
+        if self.is_partitioned {
+            // Use sparse encoder for metric engine.
+            self.sparse_encoder
+                .encode_to_vec(kv.primary_keys(), pk_buffer)?;
+        } else {
+            self.row_codec.encode_to_vec(kv.primary_keys(), pk_buffer)?;
+        }
+
+        // Write rows with
+        self.write_with_key(pk_buffer, kv, metrics)?;
+
+        metrics.value_bytes += std::mem::size_of::<Timestamp>() + std::mem::size_of::<OpType>();
 
         Ok(())
     }
@@ -299,7 +347,7 @@ impl MergeTree {
         )
     }
 
-    fn write_no_key(&self, key_value: KeyValue) {
+    fn write_no_key(&self, key_value: KeyValue) -> Result<()> {
         let partition_key = Partition::get_partition_key(&key_value, self.is_partitioned);
         let partition = self.get_or_create_partition(partition_key);
 

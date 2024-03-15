@@ -49,6 +49,7 @@ datatypes.workspace = true
 derive_builder.workspace = true
 digest = "0.10"
 futures = "0.3"
+hashbrown = "0.14"
 headers = "0.3"
 hex = { version = "0.4" }
 hostname = "0.3.1"
@@ -102,7 +103,7 @@ tokio-stream = { workspace = true, features = ["net"] }
 tonic.workspace = true
 tonic-reflection = "0.10"
 tower = { version = "0.4", features = ["full"] }
-tower-http = { version = "0.3", features = ["full"] }
+tower-http = { version = "0.4", features = ["full"] }
 urlencoding = "2.1"
 
 [target.'cfg(not(windows))'.dependencies]
@@ -119,6 +120,7 @@ criterion = "0.4"
 mysql_async = { version = "0.33", default-features = false, features = [
     "default-rustls",
 ] }
+permutation = "0.4"
 rand.workspace = true
 script = { workspace = true, features = ["python"] }
 serde_json.workspace = true

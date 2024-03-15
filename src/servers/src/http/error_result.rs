@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use axum::http::HeaderValue;
+use axum::http::{HeaderValue, StatusCode as HttpStatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use common_error::ext::ErrorExt;
@@ -21,7 +21,7 @@ use common_telemetry::logging::{debug, error};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::http::header::constants::{GREPTIME_DB_HEADER_ERROR_CODE, GREPTIME_DB_HEADER_ERROR_MSG};
+use crate::http::header::constants::GREPTIME_DB_HEADER_ERROR_CODE;
 use crate::http::header::{GREPTIME_DB_HEADER_EXECUTION_TIME, GREPTIME_DB_HEADER_FORMAT};
 use crate::http::ResponseFormat;
 
@@ -78,21 +78,49 @@ impl IntoResponse for ErrorResponse {
     fn into_response(self) -> Response {
         let ty = self.ty.as_str();
         let code = self.code;
-        let msg = self.error.clone();
         let execution_time = self.execution_time_ms;
         let mut resp = Json(self).into_response();
         resp.headers_mut()
             .insert(GREPTIME_DB_HEADER_ERROR_CODE, HeaderValue::from(code));
-        resp.headers_mut().insert(
-            GREPTIME_DB_HEADER_ERROR_MSG,
-            HeaderValue::from_str(&msg).expect("malformed error msg"),
-        );
         resp.headers_mut()
             .insert(&GREPTIME_DB_HEADER_FORMAT, HeaderValue::from_static(ty));
         resp.headers_mut().insert(
             &GREPTIME_DB_HEADER_EXECUTION_TIME,
             HeaderValue::from(execution_time),
         );
-        resp
+        let status = StatusCode::from_u32(code).unwrap_or(StatusCode::Unknown);
+        let status_code = match status {
+            StatusCode::Success | StatusCode::Cancelled => HttpStatusCode::OK,
+            StatusCode::Unsupported
+            | StatusCode::InvalidArguments
+            | StatusCode::InvalidSyntax
+            | StatusCode::RequestOutdated
+            | StatusCode::RegionAlreadyExists
+            | StatusCode::TableColumnExists
+            | StatusCode::TableAlreadyExists
+            | StatusCode::RegionNotFound
+            | StatusCode::DatabaseNotFound
+            | StatusCode::TableNotFound
+            | StatusCode::TableColumnNotFound => HttpStatusCode::BAD_REQUEST,
+            StatusCode::PermissionDenied
+            | StatusCode::AuthHeaderNotFound
+            | StatusCode::InvalidAuthHeader
+            | StatusCode::UserNotFound
+            | StatusCode::UnsupportedPasswordType
+            | StatusCode::UserPasswordMismatch
+            | StatusCode::RegionReadonly => HttpStatusCode::UNAUTHORIZED,
+            StatusCode::AccessDenied => HttpStatusCode::FORBIDDEN,
+            StatusCode::Internal
+            | StatusCode::Unexpected
+            | StatusCode::Unknown
+            | StatusCode::RegionNotReady
+            | StatusCode::RegionBusy
+            | StatusCode::RateLimited
+            | StatusCode::StorageUnavailable
+            | StatusCode::RuntimeResourcesExhausted
+            | StatusCode::PlanQuery
+            | StatusCode::EngineExecuteQuery => HttpStatusCode::INTERNAL_SERVER_ERROR,
+        };
+        (status_code, resp).into_response()
     }
 }

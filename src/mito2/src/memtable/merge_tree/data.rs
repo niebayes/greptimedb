@@ -957,6 +957,18 @@ impl DataParts {
         self.active.write_row(pk_index, kv)
     }
 
+    /// Returns the number of rows in the active buffer.
+    pub fn num_active_rows(&self) -> usize {
+        self.active.num_rows()
+    }
+
+    /// Freezes active buffer and creates a new active buffer.
+    pub fn freeze(&mut self) -> Result<()> {
+        let part = self.active.freeze(None, false)?;
+        self.frozen.push(part);
+        Ok(())
+    }
+
     /// Reads data from all parts including active and frozen parts.
     /// The returned iterator yields a record batch of one primary key at a time.
     /// The order of yielding primary keys is determined by provided weights.
@@ -976,6 +988,11 @@ impl DataParts {
     pub(crate) fn is_empty(&self) -> bool {
         self.active.is_empty() && self.frozen.iter().all(|part| part.is_empty())
     }
+
+    #[cfg(test)]
+    pub(crate) fn frozen_len(&self) -> usize {
+        self.frozen.len()
+    }
 }
 
 pub struct DataPartsReaderBuilder {
@@ -994,9 +1011,11 @@ impl DataPartsReaderBuilder {
         for p in self.parts {
             nodes.push(DataNode::new(DataSource::Part(p)));
         }
+        let num_parts = nodes.len();
         let merger = Merger::try_new(nodes)?;
         Ok(DataPartsReader {
             merger,
+            num_parts,
             elapsed: Default::default(),
         })
     }
@@ -1005,6 +1024,7 @@ impl DataPartsReaderBuilder {
 /// Reader for all parts inside a `DataParts`.
 pub struct DataPartsReader {
     merger: Merger<DataNode>,
+    num_parts: usize,
     elapsed: Duration,
 }
 
@@ -1031,6 +1051,10 @@ impl DataPartsReader {
 
     pub(crate) fn is_valid(&self) -> bool {
         self.merger.is_valid()
+    }
+
+    pub(crate) fn num_parts(&self) -> usize {
+        self.num_parts
     }
 }
 

@@ -36,6 +36,7 @@ use table::predicate::Predicate;
 
 use crate::error::Result;
 use crate::flush::WriteBufferManagerRef;
+use crate::memtable::key_values::KeyValue;
 use crate::memtable::merge_tree::metrics::WriteMetrics;
 use crate::memtable::merge_tree::tree::MergeTree;
 use crate::memtable::{
@@ -85,7 +86,7 @@ impl Default for MergeTreeConfig {
 
         Self {
             index_max_keys_per_shard: 8192,
-            data_freeze_threshold: 32768,
+            data_freeze_threshold: 131072,
             dedup: true,
             fork_dictionary_bytes,
         }
@@ -121,6 +122,17 @@ impl Memtable for MergeTreeMemtable {
         let mut pk_buffer = Vec::new();
         // Ensures the memtable always updates stats.
         let res = self.tree.write(kvs, &mut pk_buffer, &mut metrics);
+
+        self.update_stats(&metrics);
+
+        res
+    }
+
+    fn write_one(&self, key_value: KeyValue) -> Result<()> {
+        let mut metrics = WriteMetrics::default();
+        let mut pk_buffer = Vec::new();
+        // Ensures the memtable always updates stats.
+        let res = self.tree.write_one(key_value, &mut pk_buffer, &mut metrics);
 
         self.update_stats(&metrics);
 
@@ -290,14 +302,14 @@ impl MemtableBuilder for MergeTreeMemtableBuilder {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-
     use common_time::Timestamp;
+    use datafusion_common::{Column, ScalarValue};
+    use datafusion_expr::{BinaryExpr, Expr, Operator};
     use datatypes::scalars::ScalarVector;
-    use datatypes::vectors::{Int64Vector, TimestampMillisecondVector};
+    use datatypes::vectors::Int64Vector;
 
     use super::*;
-    use crate::test_util::memtable_util;
+    use crate::test_util::memtable_util::{self, collect_iter_timestamps};
 
     #[test]
     fn test_memtable_sorted_input() {
@@ -320,23 +332,10 @@ mod tests {
         let expected_ts = kvs
             .iter()
             .map(|kv| kv.timestamp().as_timestamp().unwrap().unwrap().value())
-            .collect::<BTreeSet<_>>();
+            .collect::<Vec<_>>();
 
         let iter = memtable.iter(None, None).unwrap();
-        let read = iter
-            .flat_map(|batch| {
-                batch
-                    .unwrap()
-                    .timestamps()
-                    .as_any()
-                    .downcast_ref::<TimestampMillisecondVector>()
-                    .unwrap()
-                    .iter_data()
-                    .collect::<Vec<_>>()
-                    .into_iter()
-            })
-            .map(|v| v.unwrap().0.value())
-            .collect::<BTreeSet<_>>();
+        let read = collect_iter_timestamps(iter);
         assert_eq!(expected_ts, read);
 
         let stats = memtable.stats();
@@ -384,20 +383,7 @@ mod tests {
         memtable.write(&kvs).unwrap();
 
         let iter = memtable.iter(None, None).unwrap();
-        let read = iter
-            .flat_map(|batch| {
-                batch
-                    .unwrap()
-                    .timestamps()
-                    .as_any()
-                    .downcast_ref::<TimestampMillisecondVector>()
-                    .unwrap()
-                    .iter_data()
-                    .collect::<Vec<_>>()
-                    .into_iter()
-            })
-            .map(|v| v.unwrap().0.value())
-            .collect::<Vec<_>>();
+        let read = collect_iter_timestamps(iter);
         assert_eq!(vec![0, 1, 2, 3, 4, 5, 6, 7], read);
 
         let iter = memtable.iter(None, None).unwrap();
@@ -512,20 +498,45 @@ mod tests {
 
         let expect = data.into_iter().map(|x| x.2).collect::<Vec<_>>();
         let iter = memtable.iter(None, None).unwrap();
-        let read = iter
-            .flat_map(|batch| {
-                batch
-                    .unwrap()
-                    .timestamps()
-                    .as_any()
-                    .downcast_ref::<TimestampMillisecondVector>()
-                    .unwrap()
-                    .iter_data()
-                    .collect::<Vec<_>>()
-                    .into_iter()
-            })
-            .map(|v| v.unwrap().0.value())
-            .collect::<Vec<_>>();
+        let read = collect_iter_timestamps(iter);
         assert_eq!(expect, read);
+    }
+
+    #[test]
+    fn test_memtable_filter() {
+        let metadata = memtable_util::metadata_with_primary_key(vec![0, 1], false);
+        // Try to build a memtable via the builder.
+        let memtable = MergeTreeMemtableBuilder::new(
+            MergeTreeConfig {
+                index_max_keys_per_shard: 40,
+                ..Default::default()
+            },
+            None,
+        )
+        .build(1, &metadata);
+
+        for i in 0..100 {
+            let timestamps: Vec<_> = (0..10).map(|v| i as i64 * 1000 + v).collect();
+            let kvs =
+                memtable_util::build_key_values(&metadata, "hello".to_string(), i, &timestamps, 1);
+            memtable.write(&kvs).unwrap();
+        }
+
+        for i in 0..100 {
+            let timestamps: Vec<_> = (0..10).map(|v| i as i64 * 1000 + v).collect();
+            let expr = Expr::BinaryExpr(BinaryExpr {
+                left: Box::new(Expr::Column(Column {
+                    relation: None,
+                    name: "k1".to_string(),
+                })),
+                op: Operator::Eq,
+                right: Box::new(Expr::Literal(ScalarValue::UInt32(Some(i)))),
+            });
+            let iter = memtable
+                .iter(None, Some(Predicate::new(vec![expr.into()])))
+                .unwrap();
+            let read = collect_iter_timestamps(iter);
+            assert_eq!(timestamps, read);
+        }
     }
 }

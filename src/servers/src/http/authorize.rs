@@ -35,11 +35,12 @@ use snafu::{ensure, OptionExt, ResultExt};
 use super::header::{GreptimeDbName, GREPTIME_TIMEZONE_HEADER_NAME};
 use super::{ResponseFormat, PUBLIC_APIS};
 use crate::error::{
-    self, InvalidAuthorizationHeaderSnafu, InvalidParameterSnafu, InvisibleASCIISnafu,
+    self, InvalidAuthHeaderInvisibleASCIISnafu, InvalidAuthHeaderSnafu, InvalidParameterSnafu,
     NotFoundInfluxAuthSnafu, Result, UnsupportedAuthSchemeSnafu, UrlDecodeSnafu,
 };
 use crate::http::error_result::ErrorResponse;
 use crate::http::HTTP_API_PREFIX;
+use crate::influxdb::{is_influxdb_request, is_influxdb_v2_request};
 
 /// AuthState is a holder state for [`UserProviderRef`]
 /// during [`check_http_auth`] function in axum's middleware
@@ -69,7 +70,6 @@ pub async fn inner_auth<B>(
 
     let query_ctx = query_ctx_builder.build();
     let need_auth = need_auth(&req);
-    let is_influxdb = req.uri().path().contains("influxdb");
 
     // 2. check if auth is needed
     let user_provider = if let Some(user_provider) = user_provider.filter(|_| need_auth) {
@@ -81,14 +81,14 @@ pub async fn inner_auth<B>(
     };
 
     // 3. get username and pwd
-    let (username, password) = match extract_username_and_password(is_influxdb, &req) {
+    let (username, password) = match extract_username_and_password(&req) {
         Ok((username, password)) => (username, password),
         Err(e) => {
             warn!("extract username and password failed: {}", e);
             crate::metrics::METRIC_AUTH_FAILURE
                 .with_label_values(&[e.status_code().as_ref()])
                 .inc();
-            return Err(err_response(is_influxdb, e).into_response());
+            return Err(err_response(is_influxdb_request(&req), e).into_response());
         }
     };
 
@@ -112,7 +112,7 @@ pub async fn inner_auth<B>(
             crate::metrics::METRIC_AUTH_FAILURE
                 .with_label_values(&[e.status_code().as_ref()])
                 .inc();
-            Err(err_response(is_influxdb, e).into_response())
+            Err(err_response(is_influxdb_request(&req), e).into_response())
         }
     }
 }
@@ -146,7 +146,11 @@ pub fn extract_catalog_and_schema<B>(request: &Request<B>) -> (&str, &str) {
         .and_then(|header| header.to_str().ok())
         .or_else(|| {
             let query = request.uri().query().unwrap_or_default();
-            extract_db_from_query(query)
+            if is_influxdb_v2_request(request) {
+                extract_db_from_query(query).or_else(|| extract_bucket_from_query(query))
+            } else {
+                extract_db_from_query(query)
+            }
         })
         .unwrap_or(DEFAULT_SCHEMA_NAME);
 
@@ -170,15 +174,13 @@ fn get_influxdb_credentials<B>(request: &Request<B>) -> Result<Option<(Username,
         // try header
         let (auth_scheme, credential) = header
             .to_str()
-            .context(InvisibleASCIISnafu)?
+            .context(InvalidAuthHeaderInvisibleASCIISnafu)?
             .split_once(' ')
-            .context(InvalidAuthorizationHeaderSnafu)?;
+            .context(InvalidAuthHeaderSnafu)?;
 
         let (username, password) = match auth_scheme.to_lowercase().as_str() {
             "token" => {
-                let (u, p) = credential
-                    .split_once(':')
-                    .context(InvalidAuthorizationHeaderSnafu)?;
+                let (u, p) = credential.split_once(':').context(InvalidAuthHeaderSnafu)?;
                 (u.to_string(), p.to_string().into())
             }
             "basic" => decode_basic(credential)?,
@@ -208,11 +210,8 @@ fn get_influxdb_credentials<B>(request: &Request<B>) -> Result<Option<(Username,
     }
 }
 
-pub fn extract_username_and_password<B>(
-    is_influxdb: bool,
-    request: &Request<B>,
-) -> Result<(Username, Password)> {
-    Ok(if is_influxdb {
+pub fn extract_username_and_password<B>(request: &Request<B>) -> Result<(Username, Password)> {
+    Ok(if is_influxdb_request(request) {
         // compatible with influxdb auth
         get_influxdb_credentials(request)?.context(NotFoundInfluxAuthSnafu)?
     } else {
@@ -236,13 +235,10 @@ impl TryFrom<&str> for AuthScheme {
     type Error = error::Error;
 
     fn try_from(value: &str) -> Result<Self> {
-        let (scheme, encoded_credentials) = value
-            .split_once(' ')
-            .context(InvalidAuthorizationHeaderSnafu)?;
-        ensure!(
-            !encoded_credentials.contains(' '),
-            InvalidAuthorizationHeaderSnafu
-        );
+        let (scheme, encoded_credentials) =
+            value.split_once(' ').context(InvalidAuthHeaderSnafu)?;
+
+        ensure!(!encoded_credentials.contains(' '), InvalidAuthHeaderSnafu);
 
         match scheme.to_lowercase().as_str() {
             "basic" => decode_basic(encoded_credentials)
@@ -260,7 +256,7 @@ fn auth_header<B>(req: &Request<B>) -> Result<AuthScheme> {
         .get(http::header::AUTHORIZATION)
         .context(error::NotFoundAuthHeaderSnafu)?
         .to_str()
-        .context(InvisibleASCIISnafu)?;
+        .context(InvalidAuthHeaderInvisibleASCIISnafu)?;
 
     auth_header.try_into()
 }
@@ -269,13 +265,14 @@ fn decode_basic(credential: Credential) -> Result<(Username, Password)> {
     let decoded = BASE64_STANDARD
         .decode(credential)
         .context(error::InvalidBase64ValueSnafu)?;
-    let as_utf8 = String::from_utf8(decoded).context(error::InvalidUtf8ValueSnafu)?;
+    let as_utf8 =
+        String::from_utf8(decoded).context(error::InvalidAuthHeaderInvalidUtf8ValueSnafu)?;
 
     if let Some((user_id, password)) = as_utf8.split_once(':') {
         return Ok((user_id.to_string(), password.to_string().into()));
     }
 
-    InvalidAuthorizationHeaderSnafu {}.fail()
+    InvalidAuthHeaderSnafu {}.fail()
 }
 
 fn need_auth<B>(req: &Request<B>) -> bool {
@@ -290,13 +287,24 @@ fn need_auth<B>(req: &Request<B>) -> bool {
     path.starts_with(HTTP_API_PREFIX)
 }
 
-fn extract_db_from_query(query: &str) -> Option<&str> {
+fn extract_param_from_query<'a>(query: &'a str, param: &'a str) -> Option<&'a str> {
+    let prefix = format!("{}=", param);
     for pair in query.split('&') {
-        if let Some(db) = pair.strip_prefix("db=") {
-            return if db.is_empty() { None } else { Some(db) };
+        if let Some(param) = pair.strip_prefix(&prefix) {
+            return if param.is_empty() { None } else { Some(param) };
         }
     }
     None
+}
+
+fn extract_db_from_query(query: &str) -> Option<&str> {
+    extract_param_from_query(query, "db")
+}
+
+/// InfluxDB v2 uses "bucket" instead of "db"
+/// https://docs.influxdata.com/influxdb/v1/tools/api/#apiv2write-http-endpoint
+fn extract_bucket_from_query(query: &str) -> Option<&str> {
+    extract_param_from_query(query, "bucket")
 }
 
 fn extract_influxdb_user_from_query(query: &str) -> (Option<&str>, Option<&str>) {
@@ -383,10 +391,7 @@ mod tests {
 
         let wrong_req = mock_http_request(Some("Basic dXNlcm5hbWU6 cGFzc3dvcmQ="), None).unwrap();
         let res = auth_header(&wrong_req);
-        assert_matches!(
-            res.err(),
-            Some(error::Error::InvalidAuthorizationHeader { .. })
-        );
+        assert_matches!(res.err(), Some(error::Error::InvalidAuthHeader { .. }));
 
         let wrong_req = mock_http_request(Some("Digest dXNlcm5hbWU6cGFzc3dvcmQ="), None).unwrap();
         let res = auth_header(&wrong_req);
@@ -422,10 +427,14 @@ mod tests {
         assert_matches!(extract_db_from_query(""), None);
         assert_matches!(extract_db_from_query("&"), None);
         assert_matches!(extract_db_from_query("db="), None);
+        assert_matches!(extract_bucket_from_query("bucket="), None);
+        assert_matches!(extract_bucket_from_query("db=foo"), None);
         assert_matches!(extract_db_from_query("db=foo"), Some("foo"));
+        assert_matches!(extract_bucket_from_query("bucket=foo"), Some("foo"));
         assert_matches!(extract_db_from_query("name=bar"), None);
         assert_matches!(extract_db_from_query("db=&name=bar"), None);
         assert_matches!(extract_db_from_query("db=foo&name=bar"), Some("foo"));
+        assert_matches!(extract_bucket_from_query("db=foo&bucket=bar"), Some("bar"));
         assert_matches!(extract_db_from_query("name=bar&db="), None);
         assert_matches!(extract_db_from_query("name=bar&db=foo"), Some("foo"));
         assert_matches!(extract_db_from_query("name=bar&db=&name=bar"), None);

@@ -45,6 +45,7 @@ use tokio::sync::oneshot::{self, Sender};
 use tokio::sync::Mutex;
 use tower::timeout::TimeoutLayer;
 use tower::ServiceBuilder;
+use tower_http::decompression::RequestDecompressionLayer;
 use tower_http::trace::TraceLayer;
 
 use self::authorize::AuthState;
@@ -698,6 +699,11 @@ impl HttpServer {
         Router::new()
             .route("/write", routing::post(influxdb_write_v1))
             .route("/api/v2/write", routing::post(influxdb_write_v2))
+            .layer(
+                ServiceBuilder::new()
+                    .layer(HandleErrorLayer::new(handle_error))
+                    .layer(RequestDecompressionLayer::new()),
+            )
             .route("/ping", routing::get(influxdb_ping))
             .route("/health", routing::get(influxdb_health))
             .with_state(influxdb_handler)
@@ -925,7 +931,7 @@ mod test {
         let schema = Arc::new(Schema::new(column_schemas));
 
         let recordbatches = RecordBatches::try_new(schema.clone(), vec![]).unwrap();
-        let outputs = vec![Ok(Output::RecordBatches(recordbatches))];
+        let outputs = vec![Ok(Output::new_with_record_batches(recordbatches))];
 
         let json_resp = GreptimedbV1Response::from_output(outputs).await;
         if let HttpResponse::GreptimedbV1(json_resp) = json_resp {
@@ -969,7 +975,7 @@ mod test {
         ] {
             let recordbatches =
                 RecordBatches::try_new(schema.clone(), vec![recordbatch.clone()]).unwrap();
-            let outputs = vec![Ok(Output::RecordBatches(recordbatches))];
+            let outputs = vec![Ok(Output::new_with_record_batches(recordbatches))];
             let json_resp = match format {
                 ResponseFormat::Arrow => ArrowResponse::from_output(outputs).await,
                 ResponseFormat::Csv => CsvResponse::from_output(outputs).await,

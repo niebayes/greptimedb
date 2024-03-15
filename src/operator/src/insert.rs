@@ -111,7 +111,7 @@ impl Inserter {
         .await?;
 
         let affected_rows = self.do_request(inserts, &ctx).await?;
-        Ok(Output::AffectedRows(affected_rows as _))
+        Ok(Output::new_with_affected_rows(affected_rows))
     }
 
     /// Handle row inserts request with metric engine.
@@ -149,7 +149,7 @@ impl Inserter {
                 .await?;
 
         let affected_rows = self.do_request(inserts, &ctx).await?;
-        Ok(Output::AffectedRows(affected_rows as _))
+        Ok(Output::new_with_affected_rows(affected_rows))
     }
 
     pub async fn handle_table_insert(
@@ -185,7 +185,7 @@ impl Inserter {
                 .await?;
 
         let affected_rows = self.do_request(inserts, ctx).await?;
-        Ok(Output::AffectedRows(affected_rows as _))
+        Ok(Output::new_with_affected_rows(affected_rows))
     }
 }
 
@@ -467,8 +467,6 @@ impl Inserter {
                     ctx.current_schema(),
                     &req.table_name,
                 );
-
-                info!("Logical table `{table_ref}` does not exist, try creating table");
 
                 let request_schema = req.rows.as_ref().unwrap().schema.as_slice();
                 let mut create_table_expr = build_create_table_expr(&table_ref, request_schema)?;

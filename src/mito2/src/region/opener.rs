@@ -37,6 +37,7 @@ use crate::error::{
 };
 use crate::manifest::manager::{RegionManifestManager, RegionManifestOptions};
 use crate::manifest::storage::manifest_compress_type;
+use crate::memtable::time_partition::TimePartitions;
 use crate::memtable::MemtableBuilderRef;
 use crate::region::options::RegionOptions;
 use crate::region::version::{VersionBuilder, VersionControl, VersionControlRef};
@@ -169,7 +170,15 @@ impl RegionOpener {
             RegionManifestManager::new(metadata.clone(), region_manifest_options).await?;
 
         // Initial memtable id is 0.
-        let mutable = self.memtable_builder.build(0, &metadata);
+        let part_duration = options.compaction.time_window();
+        let mutable = Arc::new(TimePartitions::new(
+            metadata.clone(),
+            self.memtable_builder,
+            0,
+            part_duration,
+        ));
+
+        debug!("Create region {} with options: {:?}", region_id, options);
 
         let version = VersionBuilder::new(metadata, mutable)
             .options(options)
@@ -249,6 +258,9 @@ impl RegionOpener {
 
         let region_id = self.region_id;
         let object_store = self.object_store(&region_options.storage)?.clone();
+
+        debug!("Open region {} with options: {:?}", region_id, self.options);
+
         let access_layer = Arc::new(AccessLayer::new(
             self.region_dir.clone(),
             object_store,
@@ -260,7 +272,13 @@ impl RegionOpener {
             self.cache_manager.clone(),
         ));
         // Initial memtable id is 0.
-        let mutable = self.memtable_builder.build(0, &metadata);
+        let part_duration = region_options.compaction.time_window();
+        let mutable = Arc::new(TimePartitions::new(
+            metadata.clone(),
+            self.memtable_builder.clone(),
+            0,
+            part_duration,
+        ));
         let version = VersionBuilder::new(metadata, mutable)
             .add_files(file_purger.clone(), manifest.files.values().cloned())
             .flushed_entry_id(manifest.flushed_entry_id)
