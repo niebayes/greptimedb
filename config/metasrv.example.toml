@@ -72,6 +72,8 @@ provider = "raft_engine"
 # topic_name_prefix = "greptimedb_wal_topic"
 # Expected number of replicas of each partition.
 # replication_factor = 1
+# The number of partitions of each topic.
+# num_partitions = 3
 # Above which a topic creation operation will be cancelled.
 # create_topic_timeout = "30s"
 # The initial backoff for kafka clients.
