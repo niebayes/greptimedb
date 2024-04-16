@@ -5352,6 +5352,7 @@ dependencies = [
  "puffin",
  "rand",
  "regex",
+ "rskafka",
  "serde",
  "serde_json",
  "serde_with",
